@@ -6,11 +6,13 @@ using Dopamine.Services.Entities;
 using Dopamine.Services.Playback;
 using System;
 using System.Threading.Tasks;
+using System.Timers;
 
 namespace Dopamine.Services.Scrobbling
 {
     public class ScrobblingService : IScrobblingService
     {
+        private Timer nowPlayingTimer;
         private SignInState signInState;
         private string username;
         private string password;
@@ -67,6 +69,8 @@ namespace Dopamine.Services.Scrobbling
             this.playbackService.PlaybackSuccess += PlaybackService_PlaybackSuccess;
             this.playbackService.PlaybackProgressChanged += PlaybackService_PlaybackProgressChanged;
             this.playbackService.PlaybackSkipped += PlaybackService_PlaybackSkipped;
+            this.nowPlayingTimer = new Timer(2000); // 2 seconds interval
+            this.nowPlayingTimer.Elapsed += NowPlayingTimer_Elapsed;
 
             this.username = SettingsClient.Get<string>("Lastfm", "Username");
             this.password = SettingsClient.Get<string>("Lastfm", "Password");
@@ -86,6 +90,7 @@ namespace Dopamine.Services.Scrobbling
         {
             // When the user skips, we don't allow scrobbling.
             this.canScrobble = false;
+            this.nowPlayingTimer.Stop();
         }
 
         private async void PlaybackService_PlaybackSuccess(object sender, PlaybackSuccessEventArgs e)
@@ -95,30 +100,40 @@ namespace Dopamine.Services.Scrobbling
                 // As soon as a track starts playing, send a Now Playing request.
                 this.trackStartTime = DateTime.Now;
                 this.canScrobble = true;
+                this.nowPlayingTimer.Start();
+                await UpdateNowPlaying();
+            }
+        }
 
-                string artist = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.ArtistName) ? this.playbackService.CurrentTrack.ArtistName : string.Empty;
-                string trackTitle = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.TrackTitle) ? this.playbackService.CurrentTrack.TrackTitle : string.Empty;
-                string albumTitle = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.AlbumTitle) ? this.playbackService.CurrentTrack.AlbumTitle : string.Empty;
+        private async void NowPlayingTimer_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            await UpdateNowPlaying();
+        }
 
-                if (!string.IsNullOrEmpty(artist) && !string.IsNullOrEmpty(trackTitle))
+        private async Task UpdateNowPlaying()
+        {
+            string artist = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.ArtistName) ? this.playbackService.CurrentTrack.ArtistName : string.Empty;
+            string trackTitle = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.TrackTitle) ? this.playbackService.CurrentTrack.TrackTitle : string.Empty;
+            string albumTitle = !string.IsNullOrEmpty(this.playbackService.CurrentTrack.AlbumTitle) ? this.playbackService.CurrentTrack.AlbumTitle : string.Empty;
+
+            if (!string.IsNullOrEmpty(artist) && !string.IsNullOrEmpty(trackTitle))
+            {
+                try
                 {
-                    try
-                    {
-                        bool isSuccess = await LastfmApi.TrackUpdateNowPlaying(this.sessionKey, artist, trackTitle, albumTitle);
+                    bool isSuccess = await LastfmApi.TrackUpdateNowPlaying(this.sessionKey, artist, trackTitle, albumTitle);
 
-                        if (isSuccess)
-                        {
-                            LogClient.Info("Successfully updated Now Playing for track '{0} - {1}'", artist, trackTitle);
-                        }
-                        else
-                        {
-                            LogClient.Error("Could not update Now Playing for track '{0} - {1}'", artist, trackTitle);
-                        }
-                    }
-                    catch (Exception ex)
+                    if (isSuccess)
                     {
-                        LogClient.Error("Could not update Now Playing for track '{0} - {1}'. Exception: {2}", artist, trackTitle, ex.Message);
+                        LogClient.Info("Successfully updated Now Playing for track '{0} - {1}'", artist, trackTitle);
                     }
+                    else
+                    {
+                        LogClient.Error("Could not update Now Playing for track '{0} - {1}'", artist, trackTitle);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogClient.Error("Could not update Now Playing for track '{0} - {1}'. Exception: {2}", artist, trackTitle, ex.Message);
                 }
             }
         }
